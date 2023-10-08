@@ -1,6 +1,22 @@
-{ config, lib, ... }: with lib.types;
+{ config, lib, options, ... }: with lib.types;
 let
   cfg = config.nixswag;
+
+  rinse = c: lib.filterAttrs (n: _: !(lib.hasPrefix "_" n)) c;
+
+  traverse = with lib; with builtins; t: c:
+    let
+      resolved = (if (t == null || t == {}) then { name = "primitive"; } else t);
+      traverseAttrs = n: v:
+        let
+          prop = resolved._properties.${n} or {};
+          propType = prop._resolvedType or null;
+        in
+          traverse propType v;
+    in
+      if isAttrs c then { content = mapAttrs traverseAttrs (rinse c); nixType = typeOf c; apiType = resolved.name; }
+      else if isList c then { content = map (traverse resolved) c; nixType = typeOf c; itemType = resolved.name; }
+      else { content = c; nixType = typeOf c; apiType = resolved.name; };
 
   property = submodule (args@{ name, ... }: {
     freeformType = oneOf [ attrs (listOf str) ];
@@ -22,10 +38,12 @@ let
         internal = true;
         default = 
           let
+            normalize = lib.removePrefix "#/definitions/";
+            items = args.config.items or {};
             ref =
-              if args.config."$ref" == null
-              then ""
-              else lib.removePrefix "#/definitions/" args.config."$ref";
+              if args.config."$ref" != null then normalize args.config."$ref"
+              else if (items."$ref" or null) != null then normalize args.config.items."$ref"
+              else "";
           in
             cfg.api.definitions.${ref} or null;
       };
@@ -55,6 +73,11 @@ let
 
     options = {
 
+      name = lib.mkOption {
+        default = name;
+        type = str;
+      };
+
       description = lib.mkOption {
         default = null;
         type = nullOr str;
@@ -63,6 +86,11 @@ let
       properties = lib.mkOption {
         type = attrsOf property;
         default = {};
+      };
+
+      _properties = lib.mkOption {
+        type = attrsOf property;
+        default = args.config.properties;
       };
 
     };
@@ -126,19 +154,10 @@ in {
         k8sLib = lib.mkOption {
           type = attrs;
           default = rec{
-            collect = f: {
+            collect = lib.collect (v: (v.itemType or "") == "io.k8s.api.core.v1.Container") walk;
+            walk = lib.mapAttrs (_: v: traverse v._resolvedType v) args.config.k8s;
 
-            };
-            k8sAttrs = a:
-              lib.attrValues (lib.filterAttrs (n: _: !(lib.hasPrefix "_" n)) a);
-
-            mapRecursive = f: lib.flatten (mapRecursive' (k8sAttrs args.config.k8s) f);
-            mapRecursive' = with builtins; subject: f:
-              map (e: if isAttrs e then
-                  mapRecursive' (k8sAttrs e) f
-                else if isList e then
-                  mapRecursive' e f
-                else f e) subject;
+              #lib.foldr (a: b: if f a then b ++ [a] else b) [] subject;
           };
         };
       };
