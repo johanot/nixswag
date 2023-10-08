@@ -69,7 +69,7 @@ let
   });
 
   k8sResource = submodule (args@{ name, ... }: {
-    freeformType = attrs;
+    freeformType = oneOf [attrs int str];
     
     options = {
       apiVersion = lib.mkOption {
@@ -129,6 +129,16 @@ in {
             collect = f: {
 
             };
+            k8sAttrs = a:
+              lib.attrValues (lib.filterAttrs (n: _: !(lib.hasPrefix "_" n)) a);
+
+            mapRecursive = f: lib.flatten (mapRecursive' (k8sAttrs args.config.k8s) f);
+            mapRecursive' = with builtins; subject: f:
+              map (e: if isAttrs e then
+                  mapRecursive' (k8sAttrs e) f
+                else if isList e then
+                  mapRecursive' e f
+                else f e) subject;
           };
         };
       };
