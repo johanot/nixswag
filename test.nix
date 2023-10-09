@@ -1,5 +1,8 @@
 let
-  lib = import <nixpkgs/lib> {};
+  lib = import <nixpkgs/lib>;
   swagLib = import ./lib.nix {};
+
+  containers = swagLib.testArgoCD.k8sLib.collectAll (a: (a._apiType or "") == "io.k8s.api.core.v1.Container");
 in
-  swagLib.testK8sDeployment.k8sLib.collect
+  lib.unique
+    (map (c: c.image) containers)

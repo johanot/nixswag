@@ -16,5 +16,10 @@
 
   testK8sDeployment = testK8s { "deployment" = (builtins.fromJSON (builtins.readFile ./deployment.json)); };
 
+  testArgoCD = with builtins; testK8s
+    (lib.mapAttrs
+      (n: _: fromJSON (readFile "${./argocd/${n}}"))
+      (lib.filterAttrs (n: _: lib.hasSuffix ".json" n) (readDir ./argocd)));
+
   #prefix: expr: lib.mapAttrs' (n: value: { name = lib.removePrefix "${prefix}." n; inherit value; }) expr.definitions;
 }

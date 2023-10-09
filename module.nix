@@ -2,7 +2,7 @@
 let
   cfg = config.nixswag;
 
-  rinse = c: lib.filterAttrs (n: _: !(lib.hasPrefix "_" n)) c;
+  rinse = c: if builtins.isAttrs c then lib.filterAttrs (n: _: !(lib.hasPrefix "_" n)) c else c;
 
   traverse = with lib; with builtins; t: c:
     let
@@ -14,9 +14,23 @@ let
         in
           traverse propType v;
     in
-      if isAttrs c then { content = mapAttrs traverseAttrs (rinse c); nixType = typeOf c; apiType = resolved.name; }
-      else if isList c then { content = map (traverse resolved) c; nixType = typeOf c; itemType = resolved.name; }
-      else { content = c; nixType = typeOf c; apiType = resolved.name; };
+      if isAttrs c then { content = mapAttrs traverseAttrs (rinse c); _nixType = typeOf c; _apiType = resolved.name; }
+      else if isList c then { content = map (traverse resolved) c; _nixType = typeOf c; _itemType = resolved.name; }
+      else { content = c; _nixType = typeOf c; _apiType = resolved.name; };
+
+  collect' = with builtins; f: v:
+    (if isAttrs v && f v then [ v ] else [])
+    ++
+    (if isAttrs v && v ? content then collect' f v.content
+     else if isAttrs v then lib.concatMap (collect' f) (lib.attrValues v)
+     else if isList v then lib.concatMap (collect' f) v
+     else []);
+
+  render' = with builtins; v:
+    (if isAttrs v && v ? content then render' v.content
+     else if isAttrs v then mapAttrs (_: v: render' v) v
+     else if isList v then map render' v
+     else rinse v);
 
   property = submodule (args@{ name, ... }: {
     freeformType = oneOf [ attrs (listOf str) ];
@@ -108,25 +122,44 @@ let
         type = str;
       };
 
-      _apiName = lib.mkOption {
+      _apiParts = lib.mkOption {
+        type = listOf str;
+        internal = true;
+        readOnly = true;
+        default = builtins.split "\/" args.config.apiVersion;
+      };
+
+      _apiGroup = lib.mkOption {
         type = str;
         internal = true;
         readOnly = true;
-        default = builtins.elemAt (builtins.split "\/" args.config.apiVersion) 0;
+        default = with builtins;
+          let
+            parts = args.config._apiParts;
+            hasGroup = length parts > 1;
+          in
+            if hasGroup then elemAt parts 0
+            else "";
       };
 
       _apiVersion = lib.mkOption {
         type = str;
         internal = true;
         readOnly = true;
-        default = builtins.elemAt (builtins.split "\/" args.config.apiVersion) 2;
+        default = with builtins;
+          let
+            parts = args.config._apiParts;
+            hasGroup = length parts > 1;
+          in
+            if hasGroup then elemAt parts 2
+            else elemAt parts 0;
       };
 
       _resolvedType = lib.mkOption {
         type = definition;
         internal = true;
         readOnly = true;
-        default = cfg.api.definitions."io.k8s.api.${args.config._apiName}.${args.config._apiVersion}.${args.config.kind}";
+        default = cfg.api.k8s."${args.config._apiGroup}//${args.config._apiVersion}//${args.config.kind}";
       };
 
       _properties = lib.mkOption {
@@ -147,17 +180,31 @@ in {
           type = attrsOf definition;
         };
 
+        api.k8s = lib.mkOption {
+          type = attrsOf definition;
+          default = lib.mapAttrs' (_: v: let x = builtins.head v.x-kubernetes-group-version-kind; in {
+            name = "${x.group}//${x.version}//${x.kind}";
+            value = v;
+          }) (lib.filterAttrs (_: v: v ? x-kubernetes-group-version-kind) args.config.api.definitions);
+        };
+
         k8s = lib.mkOption {
           type = attrsOf k8sResource;
+        };
+
+        k8sEnriched = lib.mkOption {
+          type = attrsOf k8sResource;
+          default = lib.mapAttrs (_: v: traverse v._resolvedType v) args.config.k8s;
+          readOnly = true;
+          internal = true;
         };
 
         k8sLib = lib.mkOption {
           type = attrs;
           default = rec{
-            collect = lib.collect (v: (v.itemType or "") == "io.k8s.api.core.v1.Container") walk;
-            walk = lib.mapAttrs (_: v: traverse v._resolvedType v) args.config.k8s;
-
-              #lib.foldr (a: b: if f a then b ++ [a] else b) [] subject;
+            collectAll = f: builtins.concatLists (lib.attrValues (collect f));
+            collect = f: lib.mapAttrs (_: v: render' (collect' f v)) args.config.k8sEnriched;
+            render = render';
           };
         };
       };
