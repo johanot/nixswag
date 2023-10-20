@@ -26,6 +26,14 @@ let
      else if isList v then lib.concatMap (collect' f) v
      else []);
 
+  mutate' =
+    with builtins; apiType: f: s:
+    if isAttrs s && s ? _apiType && s._apiType == apiType then f s.content
+    else if isAttrs s && s ? content then mutate' apiType f s.content
+    else if isAttrs s then lib.mapAttrs (_: v: mutate' apiType f v) s
+    else if isList s then map (v: mutate' apiType f v) s
+    else s;
+
   render' = with builtins; v:
     (if isAttrs v && v ? content then render' v.content
      else if isAttrs v then mapAttrs (_: v: render' v) v
@@ -204,6 +212,7 @@ in {
           default = rec{
             collectAll = f: builtins.concatLists (lib.attrValues (collect f));
             collect = f: lib.mapAttrs (_: v: render' (collect' f v)) args.config.k8sEnriched;
+            mapAPIType = t: f: lib.mapAttrs (_: v: render' (mutate' t f v)) args.config.k8sEnriched;
             render = render';
           };
         };
