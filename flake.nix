@@ -20,6 +20,8 @@
 
     lib = pkgs.lib;
   in {
+    nixosModules.default = import ./module.nix;
+
     devShell.${system} = pkgs.mkShell {
       buildInputs = with pkgs; [
         nixfmt
